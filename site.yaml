@@ -1,0 +1,159 @@
+---
+
+- name: Install OpenVPN
+  hosts: vpn
+  become: true
+  tasks:
+  - name: Install the openvpn and easy-rsa
+    ansible.builtin.package:
+      name:
+        - openvpn
+        - easy-rsa
+      state: latest
+  - name: Run command if '/etc/openvpn/easy-rsa' does not exist
+    ansible.builtin.command: make-cadir /etc/openvpn/easy-rsa
+    args:
+      creates: /etc/openvpn/easy-rsa
+  - name: Init-pki
+    ansible.builtin.command: /etc/openvpn/easy-rsa/easyrsa init-pki
+    args:
+      chdir: /etc/openvpn/easy-rsa/
+      creates: /etc/openvpn/easy-rsa/pki
+  - name: Build-ca
+    ansible.builtin.shell: echo '' | /etc/openvpn/easy-rsa/easyrsa build-ca nopass # Needs improving
+    args:
+      chdir: /etc/openvpn/easy-rsa/
+      creates: /etc/openvpn/easy-rsa/pki/ca.crt
+  - name: Generate cert of {{ hostvpn }}
+    ansible.builtin.shell: echo '' | /etc/openvpn/easy-rsa/easyrsa gen-req {{ hostvpn }} nopass
+    args:
+      chdir: /etc/openvpn/easy-rsa/
+      creates: '/etc/openvpn/easy-rsa/pki/reqs/{{ hostvpn }}.req'
+  - name: Generate Diffie Hellman file
+    ansible.builtin.command: /etc/openvpn/easy-rsa/easyrsa gen-dh
+    args:
+      chdir: /etc/openvpn/easy-rsa/
+      creates: '/etc/openvpn/easy-rsa/pki/dh.pem'
+  - name: Sign {{ hostvpn }} cert
+    ansible.builtin.shell: >
+        yes yes | /etc/openvpn/easy-rsa/easyrsa sign-req server {{ hostvpn }} && \
+        cat /etc/openvpn/easy-rsa/pki/issued/{{ hostvpn }}.crt | \
+        awk '/BEGIN CERTIFICATE/,/END CERTIFICATE/' >/tmp/tmp.crt && \
+        mv /tmp/tmp.crt /etc/openvpn/easy-rsa/pki/issued/{{ hostvpn }}.crt
+    args:
+      chdir: /etc/openvpn/easy-rsa/
+      creates: '/etc/openvpn/easy-rsa/pki/issued/{{ hostvpn }}.crt'
+    environment:
+      EASYRSA_PASSIN: 'pass:test'
+  - name: Copy dh.pem file
+    ansible.builtin.copy:
+      remote_src: true
+      src: /etc/openvpn/easy-rsa/pki/dh.pem
+      dest: /etc/openvpn/dh2048.pem
+      owner: root
+      group: root
+  - name: Copy ca.crt file
+    ansible.builtin.copy:
+      remote_src: true
+      src: /etc/openvpn/easy-rsa/pki/ca.crt
+      dest: /etc/openvpn/ca.crt
+      owner: root
+      group: root
+  - name: Copy {{ hostvpn }}.crt file
+    ansible.builtin.copy:
+      remote_src: true
+      src: /etc/openvpn/easy-rsa/pki/issued/{{ hostvpn }}.crt
+      dest: /etc/openvpn/{{ hostvpn }}.crt
+      owner: root
+      group: root
+  - name: Copy {{ hostvpn }}.key file
+    ansible.builtin.copy:
+      remote_src: true
+      src: /etc/openvpn/easy-rsa/pki/private/{{ hostvpn }}.key
+      dest: /etc/openvpn/
+      owner: root
+      group: root
+  - name: Write server confiration
+    ansible.builtin.template:
+      src: templates/server.j2
+      dest: /etc/openvpn/server.conf
+  - name: Enable and start service
+    ansible.builtin.service:
+      name: openvpn@server
+      enabled: yes
+      state: started
+  #
+  # Client certs
+  #
+  - name: Generate clients {{ users }} cert request
+    ansible.builtin.shell:
+      cmd: echo -e "yes\n{{ item }}" | /etc/openvpn/easy-rsa/easyrsa gen-req {{ item }} nopass
+    args:
+      chdir: /etc/openvpn/easy-rsa/
+      creates: '/etc/openvpn/easy-rsa/pki/reqs/{{ item }}.req'
+    with_items: "{{ users }}"
+  - name: Sign {{ users }} certs
+    ansible.builtin.shell: >
+        yes yes | /etc/openvpn/easy-rsa/easyrsa sign-req server {{ item }} && \
+        cat /etc/openvpn/easy-rsa/pki/issued/{{ item }}.crt | \
+        awk '/BEGIN CERTIFICATE/,/END CERTIFICATE/' >/tmp/tmp.crt && \
+        mv /tmp/tmp.crt /etc/openvpn/easy-rsa/pki/issued/{{ item }}.crt
+    args:
+      chdir: /etc/openvpn/easy-rsa/
+      creates: '/etc/openvpn/easy-rsa/pki/issued/{{ item }}.crt'
+    environment:
+      EASYRSA_PASSIN: 'pass:test'
+    with_items: "{{ users }}"
+
+  #
+  # Clients conf
+  #
+  - name: Slurp CA file
+    ansible.builtin.slurp:
+      src: /etc/openvpn/ca.crt
+    register: ca_cert
+  - name: Slurp cert files of {{ users }}
+    ansible.builtin.slurp:
+      src: /etc/openvpn/easy-rsa/pki/issued/{{ item }}.crt
+    register: user_certs
+    with_items: "{{ users }}"
+  - name: Slurp keys files of {{ users }}
+    ansible.builtin.slurp:
+      src: /etc/openvpn/easy-rsa/pki/private/{{ item }}.key
+    register: user_keys
+    with_items: "{{ users }}"
+
+
+  # There MUST be asimpler way to do this
+  - set_fact:
+      user_certs_keys: >-
+        {{ user_certs_keys | default([])
+        + [item | combine({ 'key': key_item['content'] }) ]
+        }}
+    vars:
+      key_item: >-
+        {{ user_keys['results']
+           | selectattr('item','equalto',item['item'])
+           | list
+           | first
+        }}
+    loop: "{{ user_certs['results'] }}"
+
+  - debug:
+      msg: "{{ item }}"
+    with_items: "{{ user_certs_keys }}"
+  - name: Write user confiration
+    ansible.builtin.template:
+       src: templates/user.j2
+       dest: /tmp/{{ item.item }}.conf
+    with_items: "{{ user_certs_keys }}" 
+
+  # iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -d 192.168.1.0/24 -o ens3 -j MASQUERADE
+  - name: Add POSTROUTING rule
+    ansible.builtin.iptables:
+      table: nat
+      chain: POSTROUTING
+      source: 10.8.0.0/24
+      destination: 192.168.1.0/24
+      out_interface: ens3
+      jump: MASQUERADE

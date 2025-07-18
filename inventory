@@ -1,0 +1,7 @@
+vpn:
+  hosts:
+    openvpn:
+      hostvpn: vm1572.kaj.pouta.csc.fi
+      users:
+      - lvarin
+      - agonzale

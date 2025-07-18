@@ -1,2 +1,7 @@
-# openvpn-ansible
-Simple ansible file to deploy an OpenVPN server
+# OpenVPN
+
+## Quickstart
+
+```sh
+ansible-playbook site.yaml -i inventory
+```

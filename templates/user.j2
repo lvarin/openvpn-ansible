@@ -1,0 +1,30 @@
+# Configuration for {{ item.item }}
+
+client
+dev tun
+proto udp
+
+remote {{ hostvpn }} 1194
+
+resolv-retry infinite
+nobind
+persist-key
+persist-tun
+
+<ca>
+{{ ca_cert.content | b64decode| trim}}
+</ca>
+
+<cert>
+{{ item.content | b64decode | trim }}
+</cert>
+
+<key>
+{{ item.key | b64decode | trim }}
+</key>
+
+remote-cert-tls server
+
+# tls-auth ta.key 1
+cipher AES-256-CBC
+verb 3
