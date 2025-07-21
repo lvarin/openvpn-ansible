@@ -85,12 +85,12 @@ dev tun
 # configuration example.
 ca ca.crt
 cert {{ hostvpn }}.crt
-key {{ hostvpn }}.key  # This file should be kept secret
+key /etc/openvpn/{{ hostvpn }}.key  # This file should be kept secret
 
 # Diffie hellman parameters.
 # Generate your own with:
 #   openssl dhparam -out dh2048.pem 2048
-dh dh.pem
+dh dh2048.pem
 
 # Allow to connect to really old OpenVPN versions
 # without AEAD support (OpenVPN 2.3.x or older)
